@@ -114,9 +114,9 @@ class PreyRunner(MlpRunner):
                 assert n_rollout_threads == 1, (
                     "only support one env for evaluation in smac domain.")
                 for i in range(n_rollout_threads):
-                    if 'won' in infos[i][0].keys():
-                        if infos[i][0]['won']:  # take one agent
-                            env_info['win_rate'] = 1 if infos[i][0]['won'] else 0
+                    if 'won' in infos[0].keys():
+                        if infos[0]['won']:  # take one agent
+                            env_info['win_rate'] = 1 if infos[0]['won'] else 0
                 env_info['average_step_rewards'] = np.mean(episode_rewards)
                 env_info['average_episode_rewards'] = np.sum(episode_rewards) / n_rollout_threads
                 return env_info

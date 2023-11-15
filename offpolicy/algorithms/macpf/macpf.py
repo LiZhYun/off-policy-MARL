@@ -77,7 +77,7 @@ class MACPF(Trainer):
                                                 [torch.zeros(batch_size)] *
                                                 (self.num_agents - agent_idx), -1)
                     pol_nact, _, naction_log_prob = policy.get_actions(nobs_batch[p_id][agent_idx],
-                                                        navail_act_batch[p_id][agent_idx],
+                                                        navail_act_batch[p_id][agent_idx] if navail_act_batch[p_id] is not None else None, 
                                                         parents_actions=actions,
                                                         execution_mask=tmp_execution_mask,
                                                         dep_mode=dep_mode

@@ -8,56 +8,17 @@ import setproctitle
 import torch
 from offpolicy.config import get_config
 from offpolicy.utils.util import get_cent_act_dim, get_dim_from_space
-from offpolicy.envs.starcraft2.StarCraft2_Env import StarCraft2Env
-from offpolicy.envs.starcraft2.SMACv2 import SMACv2
-# from offpolicy.envs.starcraft2.smac_maps import get_map_params
+from offpolicy.envs.predator_prey.predatorprey_wrapper import PredatorPreyWrapper
 from offpolicy.envs.env_wrappers import ShareDummyVecEnv, ShareSubprocVecEnv
-
-def parse_smacv2_distribution(args):
-    units = args.units.split('v')
-    distribution_config = {
-        "n_units": int(units[0]),
-        "n_enemies": int(units[1]),
-        "start_positions": {
-            "dist_type": "surrounded_and_reflect",
-            "p": 0.5,
-            "map_x": 32,
-            "map_y": 32,
-        }
-    }
-    if 'protoss' in args.map_name:
-        distribution_config['team_gen'] = {
-            "dist_type": "weighted_teams",
-            "unit_types": ["stalker", "zealot", "colossus"],
-            "weights": [0.45, 0.45, 0.1],
-            "observe": True,
-        }
-    elif 'zerg' in args.map_name:
-        distribution_config['team_gen'] = {
-            "dist_type": "weighted_teams",
-            "unit_types": ["zergling", "baneling", "hydralisk"],
-            "weights": [0.45, 0.1, 0.45],
-            "observe": True,
-        } 
-    elif 'terran' in args.map_name:
-        distribution_config['team_gen'] = {
-            "dist_type": "weighted_teams",
-            "unit_types": ["marine", "marauder", "medivac"],
-            "weights": [0.45, 0.45, 0.1],
-            "observe": True,
-        } 
-    return distribution_config
 
 def make_train_env(all_args):
     def get_env_fn(rank):
         def init_env():
-            if all_args.env_name == "StarCraft2":
-                env = StarCraft2Env(all_args)
-            elif all_args.env_name == "StarCraft2v2":
-                env = SMACv2(capability_config=parse_smacv2_distribution(all_args), map_name=all_args.map_name)
+            if all_args.env_name == "predator_prey":
+                env = PredatorPreyWrapper(num_agents=all_args.num_agents, n_preys=all_args.num_preys, penalty=all_args.penalty)
             else:
                 print("Can not support the " +
-                      all_args.env_name + "environment.")
+                      all_args.env_name + " environment.")
                 raise NotImplementedError
             env.seed(all_args.seed + rank * 1000)
             return env
@@ -71,15 +32,13 @@ def make_train_env(all_args):
 def make_eval_env(all_args):
     def get_env_fn(rank):
         def init_env():
-            if all_args.env_name == "StarCraft2":
-                env = StarCraft2Env(all_args)
-            elif all_args.env_name == "StarCraft2v2":
-                env = SMACv2(capability_config=parse_smacv2_distribution(all_args), map_name=all_args.map_name)
+            if all_args.env_name == "predator_prey":
+                env = PredatorPreyWrapper(num_agents=all_args.num_agents, n_preys=all_args.num_preys, penalty=all_args.penalty)
             else:
                 print("Can not support the " +
-                      all_args.env_name + "environment.")
+                      all_args.env_name + " environment.")
                 raise NotImplementedError
-            env.seed(all_args.seed * 50000 + rank * 10000)
+            env.seed(all_args.seed + rank * 1000)
             return env
         return init_env
     if all_args.n_eval_rollout_threads == 1:
@@ -89,15 +48,14 @@ def make_eval_env(all_args):
 
 
 def parse_args(args, parser):
-    parser.add_argument('--map_name', type=str, default='10gen_protoss',
-                        help="Which smac map to run on")
-    parser.add_argument('--units', type=str, default='10v10') # for smac v2
-    parser.add_argument('--use_available_actions', action='store_false',
-                        default=True, help="Whether to use available actions")
+    parser.add_argument("--num_agents", type=int, default=2,
+                        help="number of controlled players.")
+    parser.add_argument("--num_preys", type=int, default=1,
+                        help="number of preys.")
+    parser.add_argument("--penalty", type=float, default=-0.5,
+                        help="by default True. If False, sample action according to probability")
     parser.add_argument('--use_same_share_obs', action='store_false',
                         default=True, help="Whether to use available actions")
-    parser.add_argument('--use_global_all_local_state', action='store_true',
-                        default=False, help="Whether to use available actions")
 
     all_args = parser.parse_known_args(args)[0]
 
@@ -121,7 +79,7 @@ def main(args):
 
     # setup file to output tensorboard, hyperparameters, and saved models
     run_dir = Path(os.path.split(os.path.dirname(os.path.abspath(__file__)))[
-                   0] + "/results") / all_args.env_name / all_args.map_name / all_args.algorithm_name / all_args.experiment_name
+                   0] + "/results") / all_args.env_name / all_args.algorithm_name / all_args.experiment_name
     if not run_dir.exists():
         os.makedirs(str(run_dir))
 
@@ -134,7 +92,7 @@ def main(args):
                          name=str(all_args.algorithm_name) + "_" +
                          str(all_args.experiment_name) +
                          "_seed" + str(all_args.seed),
-                         group=all_args.map_name,
+                        #  group=all_args.map_name,
                          dir=str(run_dir),
                          job_type="training",
                          reinit=True,
@@ -163,15 +121,10 @@ def main(args):
 
     env = make_train_env(all_args)
 
-    if all_args.env_name == 'StarCraft2':
-        from bta.envs.starcraft2.smac_maps import get_map_params
-        num_agents = get_map_params(all_args.map_name)["n_agents"]
-    elif all_args.env_name == "StarCraft2v2":
-        from smacv2.env.starcraft2.maps import get_map_params
-        num_agents = parse_smacv2_distribution(all_args)['n_units']
+    num_agents = all_args.num_agents
     
-    buffer_length = get_map_params(all_args.map_name)["limit"]
-    print(buffer_length)
+    # buffer_length = get_map_params(all_args.map_name)["limit"]
+    # print(buffer_length)
     # num_agents = get_map_params(all_args.map_name)["n_agents"]
     all_args.num_agents = num_agents
     # create policies and mapping fn
@@ -200,17 +153,17 @@ def main(args):
 
     # choose algo
     if all_args.algorithm_name in ["rmatd3", "rmaddpg", "rmasac", "qmix", "vdn"]:
-        from offpolicy.runner.rnn.smac_runner import SMACRunner as Runner
+        from offpolicy.runner.rnn.predator_runner import PreyRunner as Runner
         assert all_args.n_rollout_threads == 1, ("only support 1 env in recurrent version.")
         eval_env = make_train_env(all_args)
     elif all_args.algorithm_name in ["matd3", "maddpg", "masac", "mqmix", "mvdn"]:
-        from offpolicy.runner.mlp.smac_runner import SMACRunner as Runner
+        from offpolicy.runner.mlp.predator_runner import PreyRunner as Runner
         eval_env = make_eval_env(all_args)
     elif all_args.algorithm_name in ["maven"]:
-        from offpolicy.runner.mlp.smac_runner_maven import SMACRunner as Runner
+        from offpolicy.runner.mlp.predator_runner_maven import PreyRunner as Runner
         eval_env = make_eval_env(all_args)
     elif all_args.algorithm_name in ["macpf"]:
-        from offpolicy.runner.mlp.smac_runner_macpf import SMACRunner as Runner
+        from offpolicy.runner.mlp.predator_runner_macpf import PreyRunner as Runner
         eval_env = make_eval_env(all_args)
     else:
         raise NotImplementedError
@@ -223,9 +176,10 @@ def main(args):
               "num_agents": num_agents,
               "device": device,
               "run_dir": run_dir,
-              "buffer_length": buffer_length,
+            #   "buffer_length": buffer_length,
               "use_same_share_obs": all_args.use_same_share_obs,
-              "use_available_actions": all_args.use_available_actions}
+            #   "use_available_actions": all_args.use_available_actions
+              }
 
     total_num_steps = 0
     runner = Runner(config=config)

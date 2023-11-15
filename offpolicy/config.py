@@ -175,8 +175,8 @@ def get_config():
                         action='store_true', default=False)
 
     # eval parameters
-    parser.add_argument('--use_eval', action='store_false',
-                        default=True, help="Whether to conduct the evaluation")
+    parser.add_argument('--use_eval', action='store_true',
+                        default=False, help="Whether to conduct the evaluation")
     parser.add_argument('--eval_interval', type=int,  default=1000,
                         help="After how many episodes the policy should be evaled")
     parser.add_argument('--num_eval_episodes', type=int, default=32,

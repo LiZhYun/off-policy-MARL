@@ -201,6 +201,16 @@ class M_QMix:
         curr_Q_tot = self.mixer(agent_qs, cent_obs_batch, to_torch(noises_batch[self.policy_ids[0]][0])).squeeze(-1).to(**self.tpdv)
         next_step_Q_tot = self.target_mixer(agent_next_qs, cent_nobs_batch, to_torch(noises_batch[self.policy_ids[0]][0])).squeeze(-1)
 
+        q_softmax_actions = torch.nn.functional.softmax(pol_all_q_out, dim=-1).reshape(cent_obs_batch.shape[0],-1)
+        state_and_softactions = torch.cat([q_softmax_actions, cent_obs_batch], dim=-1)
+        # s_and_softa_reshaped = state_and_softactions.reshape(-1, state_and_softactions.shape[-1])
+
+        discrim_prediction = self.discrim(state_and_softactions.detach())
+
+        discrim_target = to_torch(noises_batch[self.policy_ids[0]][0]).to(**self.tpdv).long().detach().max(dim=1)[1]
+        discrim_loss = self.discrim_loss(discrim_prediction, discrim_target)
+
+        averaged_discrim_loss = discrim_loss.mean()
         # all agents must share reward, so get the reward sequence for an agent
         # form bootstrapped targets
         if self.use_popart:
@@ -209,6 +219,8 @@ class M_QMix:
             Q_tot_targets = self.value_normalizer[p_id](Q_tot_targets)
         else:
             Q_tot_targets = rewards + (1 - dones_env_batch) * self.args.gamma * next_step_Q_tot.to(**self.tpdv)
+        
+        Q_tot_targets = Q_tot_targets + 0.1 * discrim_loss.view_as(rewards)
 
         # loss is MSE Bellman Error
         error = curr_Q_tot - Q_tot_targets.detach()
@@ -226,16 +238,6 @@ class M_QMix:
             else:
                 loss = mse_loss(error).mean()
             new_priorities = None
-
-        q_softmax_actions = torch.nn.functional.softmax(pol_all_q_out, dim=-1).reshape(cent_obs_batch.shape[0],-1)
-        state_and_softactions = torch.cat([q_softmax_actions, cent_obs_batch], dim=-1)
-        # s_and_softa_reshaped = state_and_softactions.reshape(-1, state_and_softactions.shape[-1])
-        discrim_prediction = self.discrim(state_and_softactions)
-
-        discrim_target = to_torch(noises_batch[self.policy_ids[0]][0]).to(**self.tpdv).long().detach().max(dim=1)[1]
-        discrim_loss = self.discrim_loss(discrim_prediction, discrim_target)
-
-        averaged_discrim_loss = discrim_loss.mean()
 
         loss = loss + averaged_discrim_loss
 

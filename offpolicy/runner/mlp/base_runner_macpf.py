@@ -296,7 +296,7 @@ class MlpRunner(object):
         warmup_rewards = []
         print("warm up...")
         for _ in range(int(num_warmup_episodes // self.num_envs) + 1):
-            env_info = self.collecter(explore=True, training_episode=False, warmup=True)
+            env_info = self.collecter(explore=True, training_episode=False, warmup=False)
             warmup_rewards.append(env_info['average_step_rewards'])
         warmup_reward = np.mean(warmup_rewards)
         print("warmup average step rewards: {}".format(warmup_reward))

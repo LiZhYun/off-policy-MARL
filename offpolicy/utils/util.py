@@ -322,3 +322,95 @@ def tile_images(img_nhwc):
     img_HhWwc = img_HWhwc.transpose(0, 2, 1, 3, 4)
     img_Hh_Ww_c = img_HhWwc.reshape(H*h, W*w, c)
     return img_Hh_Ww_c
+
+def generate_mask_from_order(agent_order, ego_exclusive):
+    """Generate execution mask from agent order.
+
+    Used during autoregressive training.
+
+    Args:
+        agent_order (torch.Tensor): Agent order of shape [*, n_agents].
+
+    Returns:
+        torch.Tensor: Execution mask of shape [*, n_agents, n_agents - 1].
+    """
+    shape = agent_order.shape
+    n_agents = shape[-1]
+    agent_order = agent_order.view(-1, n_agents)
+    bs = agent_order.shape[0]
+
+    cur_execution_mask = torch.zeros(bs, n_agents).to(agent_order)
+    all_execution_mask = torch.zeros(bs, n_agents, n_agents).to(agent_order)
+
+    batch_indices = torch.arange(bs)
+    for i in range(n_agents):
+        agent_indices = agent_order[:, i].long()
+
+        cur_execution_mask[batch_indices, agent_indices] = 1
+        all_execution_mask[batch_indices, :,
+                           agent_indices] = 1 - cur_execution_mask
+        all_execution_mask[batch_indices, agent_indices, agent_indices] = 1
+    
+    if not ego_exclusive:
+        # [*, n_agent, n_agents]
+        all_execution_mask = all_execution_mask.view(*shape[:-1], n_agents, n_agents) * (1-torch.eye(n_agents).to(agent_order)).unsqueeze(0).repeat(bs, 1, 1)
+        # for batch_idx in batch_indices:
+        #     for agent_idx in range(n_agents):
+        #         tmp_mask = torch.zeros(n_agents).to(agent_order)
+        #         indices = torch.nonzero(all_execution_mask[batch_idx, agent_idx] == 1)
+        #         if indices.numel() > 0:
+        #             last_index = indices[-1]
+        #             tmp_mask[last_index] = 1
+        #             all_execution_mask[batch_idx, agent_idx] = tmp_mask
+        return all_execution_mask
+    else:
+        # [*, n_agents, n_agents - 1]
+        execution_mask = torch.zeros(bs, n_agents,
+                                     n_agents - 1).to(agent_order)
+        for i in range(n_agents):
+            execution_mask[:, i] = torch.cat([
+                all_execution_mask[..., i, :i], all_execution_mask[..., i,
+                                                                   i + 1:]
+            ], -1)
+        return execution_mask.view(*shape[:-1], n_agents, n_agents - 1)
+    
+class FixedCategorical(torch.distributions.Categorical):
+    def sample(self):
+        return super().sample().unsqueeze(-1)
+    
+    def rsample(self, hard=True, tau=1.0):
+        logits_2d = self.logits.reshape(*self.logits.shape[:-1], self._num_events)
+        
+        return F.gumbel_softmax(logits_2d, hard=hard, tau=tau)
+
+    def log_probs(self, actions):
+        return (
+            super()
+            .log_prob(actions.squeeze(-1))
+            .view(actions.size(0), -1)
+            .sum(-1)
+            .unsqueeze(-1)
+        )
+
+    def log_probs_joint(self, actions):
+        return (
+            super()
+            .log_prob(actions.squeeze(-1))
+            .view(actions.size(0), -1)
+            .unsqueeze(-1)
+        )
+
+    def mode(self):
+        return self.probs.argmax(dim=-1, keepdim=True)
+
+
+# Normal
+class FixedNormal(torch.distributions.Normal):
+    def log_probs(self, actions):
+        return super().log_prob(actions)
+
+    def entrop(self):
+        return super.entropy().sum(-1)
+
+    def mode(self):
+        return self.mean

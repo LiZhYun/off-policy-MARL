@@ -7,7 +7,7 @@ def get_config():
 
     # prepare parameters
     parser.add_argument("--algorithm_name", type=str, default="rmatd3", choices=[
-                        "rmatd3", "rmaddpg", "rmasac", "qmix", "vdn", "matd3", "maddpg", "masac", "mqmix", "mvdn"])
+                        "rmatd3", "rmaddpg", "rmasac", "qmix", "vdn", "matd3", "maddpg", "masac", "mqmix", "mvdn", "maven", "macpf"])
     parser.add_argument("--experiment_name", type=str, default="check")
     parser.add_argument("--seed", type=int, default=1,
                         help="Random seed for numpy/torch")
@@ -76,6 +76,8 @@ def get_config():
                         default=False, help="Whether to use conv1d")
     parser.add_argument("--stacked_frames", type=int, default=1,
                         help="Dimension of hidden layers for actor/critic networks")
+    parser.add_argument('--noise_dim', type=int, default=2,
+                        help="Dimension of hidden layers for actor/critic networks")
 
     # recurrent parameters
     parser.add_argument('--prev_act_inp', action='store_true', default=False,
@@ -141,8 +143,8 @@ def get_config():
     parser.add_argument('--automatic_entropy_tune', action='store_false',
                         default=True, help="Whether use a centralized critic")
     # qmix parameters
-    parser.add_argument('--use_double_q', action='store_false',
-                        default=True, help="Whether to use double q learning")
+    parser.add_argument('--use_double_q', action='store_true',
+                        default=False, help="Whether to use double q learning")
     parser.add_argument('--hypernet_layers', type=int, default=2,
                         help="Number of layers for hypernetworks. Must be either 1 or 2")
     parser.add_argument('--mixer_hidden_dim', type=int, default=32,
@@ -175,7 +177,7 @@ def get_config():
     # eval parameters
     parser.add_argument('--use_eval', action='store_false',
                         default=True, help="Whether to conduct the evaluation")
-    parser.add_argument('--eval_interval', type=int,  default=10000,
+    parser.add_argument('--eval_interval', type=int,  default=25,
                         help="After how many episodes the policy should be evaled")
     parser.add_argument('--num_eval_episodes', type=int, default=32,
                         help="How many episodes to collect for each eval")

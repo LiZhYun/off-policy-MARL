@@ -9,15 +9,52 @@ import torch
 from offpolicy.config import get_config
 from offpolicy.utils.util import get_cent_act_dim, get_dim_from_space
 from offpolicy.envs.starcraft2.StarCraft2_Env import StarCraft2Env
-from offpolicy.envs.starcraft2.smac_maps import get_map_params
+from offpolicy.envs.starcraft2.SMACv2 import SMACv2
+# from offpolicy.envs.starcraft2.smac_maps import get_map_params
 from offpolicy.envs.env_wrappers import ShareDummyVecEnv, ShareSubprocVecEnv
 
+def parse_smacv2_distribution(args):
+    units = args.units.split('v')
+    distribution_config = {
+        "n_units": int(units[0]),
+        "n_enemies": int(units[1]),
+        "start_positions": {
+            "dist_type": "surrounded_and_reflect",
+            "p": 0.5,
+            "map_x": 32,
+            "map_y": 32,
+        }
+    }
+    if 'protoss' in args.map_name:
+        distribution_config['team_gen'] = {
+            "dist_type": "weighted_teams",
+            "unit_types": ["stalker", "zealot", "colossus"],
+            "weights": [0.45, 0.45, 0.1],
+            "observe": True,
+        }
+    elif 'zerg' in args.map_name:
+        distribution_config['team_gen'] = {
+            "dist_type": "weighted_teams",
+            "unit_types": ["zergling", "baneling", "hydralisk"],
+            "weights": [0.45, 0.1, 0.45],
+            "observe": True,
+        } 
+    elif 'terran' in args.map_name:
+        distribution_config['team_gen'] = {
+            "dist_type": "weighted_teams",
+            "unit_types": ["marine", "marauder", "medivac"],
+            "weights": [0.45, 0.45, 0.1],
+            "observe": True,
+        } 
+    return distribution_config
 
 def make_train_env(all_args):
     def get_env_fn(rank):
         def init_env():
             if all_args.env_name == "StarCraft2":
                 env = StarCraft2Env(all_args)
+            elif all_args.env_name == "StarCraft2v2":
+                env = SMACv2(capability_config=parse_smacv2_distribution(all_args), map_name=all_args.map_name)
             else:
                 print("Can not support the " +
                       all_args.env_name + "environment.")
@@ -36,6 +73,8 @@ def make_eval_env(all_args):
         def init_env():
             if all_args.env_name == "StarCraft2":
                 env = StarCraft2Env(all_args)
+            elif all_args.env_name == "StarCraft2v2":
+                env = SMACv2(capability_config=parse_smacv2_distribution(all_args), map_name=all_args.map_name)
             else:
                 print("Can not support the " +
                       all_args.env_name + "environment.")
@@ -50,8 +89,9 @@ def make_eval_env(all_args):
 
 
 def parse_args(args, parser):
-    parser.add_argument('--map_name', type=str, default='3m',
+    parser.add_argument('--map_name', type=str, default='10gen_protoss',
                         help="Which smac map to run on")
+    parser.add_argument('--units', type=str, default='10v10') # for smac v2
     parser.add_argument('--use_available_actions', action='store_false',
                         default=True, help="Whether to use available actions")
     parser.add_argument('--use_same_share_obs', action='store_false',
@@ -121,10 +161,18 @@ def main(args):
     np.random.seed(all_args.seed)
 
     env = make_train_env(all_args)
+
+    if all_args.env_name == 'StarCraft2':
+        from bta.envs.starcraft2.smac_maps import get_map_params
+        num_agents = get_map_params(all_args.map_name)["n_agents"]
+    elif all_args.env_name == "StarCraft2v2":
+        from smacv2.env.starcraft2.maps import get_map_params
+        num_agents = parse_smacv2_distribution(all_args)['n_units']
+    
     buffer_length = get_map_params(all_args.map_name)["limit"]
     print(buffer_length)
-    num_agents = get_map_params(all_args.map_name)["n_agents"]
-
+    # num_agents = get_map_params(all_args.map_name)["n_agents"]
+    all_args.num_agents = num_agents
     # create policies and mapping fn
     if all_args.share_policy:
         print(env.share_observation_space[0])
@@ -156,6 +204,12 @@ def main(args):
         eval_env = make_train_env(all_args)
     elif all_args.algorithm_name in ["matd3", "maddpg", "masac", "mqmix", "mvdn"]:
         from offpolicy.runner.mlp.smac_runner import SMACRunner as Runner
+        eval_env = make_eval_env(all_args)
+    elif all_args.algorithm_name in ["maven"]:
+        from offpolicy.runner.mlp.smac_runner_maven import SMACRunner as Runner
+        eval_env = make_eval_env(all_args)
+    elif all_args.algorithm_name in ["macpf"]:
+        from offpolicy.runner.mlp.smac_runner_macpf import SMACRunner as Runner
         eval_env = make_eval_env(all_args)
     else:
         raise NotImplementedError

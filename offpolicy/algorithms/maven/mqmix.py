@@ -1,11 +1,25 @@
 import torch
 import copy
-from offpolicy.algorithms.mqmix.algorithm.mq_mixer import M_QMixer
+from offpolicy.algorithms.maven.algorithm.mq_mixer import M_QMixer
 from offpolicy.algorithms.mvdn.algorithm.mvdn_mixer import M_VDNMixer
 from offpolicy.utils.util import soft_update, huber_loss, mse_loss, to_torch
 import numpy as np
 from offpolicy.utils.popart import PopArt
 
+class Discrim(torch.nn.Module):
+
+    def __init__(self, input_size, output_size, args):
+        super().__init__()
+        self.args = args
+        layers = [torch.nn.Linear(input_size, self.args.hidden_size), torch.nn.ReLU()]
+        for _ in range(self.args.layer_N - 1):
+            layers.append(torch.nn.Linear(self.args.hidden_size, self.args.hidden_size))
+            layers.append(torch.nn.ReLU())
+        layers.append(torch.nn.Linear(self.args.hidden_size, output_size))
+        self.model = torch.nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.model(x)
 
 class M_QMix:
     def __init__(self, args, num_agents, policies, policy_mapping_fn, device=torch.device("cuda:0"), vdn=False):
@@ -54,11 +68,17 @@ class M_QMix:
         self.target_policies = {p_id: copy.deepcopy(self.policies[p_id]) for p_id in self.policy_ids}
         self.target_mixer = copy.deepcopy(self.mixer)
 
+        discrim_input = self.policies['policy_0'].central_obs_dim + self.num_agents * self.policies['policy_0'].act_dim
+        self.discrim = Discrim(discrim_input, self.args.noise_dim, args)
+        self.discrim.to(self.device)
+        self.discrim_loss = torch.nn.CrossEntropyLoss(reduction="none")
+
         # collect all trainable parameters: each policy parameters, and the mixer parameters
         self.parameters = []
         for policy in self.policies.values():
             self.parameters += policy.parameters()
         self.parameters += self.mixer.parameters()
+        self.parameters += self.discrim.parameters()
 
         self.optimizer = torch.optim.Adam(params=self.parameters, lr=self.lr, eps=self.opti_eps)
 
@@ -73,15 +93,15 @@ class M_QMix:
         nobs_batch, cent_nobs_batch, \
         dones_batch, dones_env_batch, valid_transition_batch,\
         avail_act_batch, navail_act_batch, \
-        importance_weights, idxes = batch
+        importance_weights, idxes, noises_batch = batch
 
         if use_same_share_obs:
-            cent_obs_batch = to_torch(cent_obs_batch[self.policy_ids[0]])
-            cent_nobs_batch = to_torch(cent_nobs_batch[self.policy_ids[0]])
+            cent_obs_batch = to_torch(cent_obs_batch[self.policy_ids[0]]).to(**self.tpdv)
+            cent_nobs_batch = to_torch(cent_nobs_batch[self.policy_ids[0]]).to(**self.tpdv)
         else:
             choose_agent_id = 0
-            cent_obs_batch = to_torch(cent_obs_batch[self.policy_ids[0]][choose_agent_id])
-            cent_nobs_batch = to_torch(cent_nobs_batch[self.policy_ids[0]][choose_agent_id])
+            cent_obs_batch = to_torch(cent_obs_batch[self.policy_ids[0]][choose_agent_id]).to(**self.tpdv)
+            cent_nobs_batch = to_torch(cent_nobs_batch[self.policy_ids[0]][choose_agent_id]).to(**self.tpdv)
 
         dones_env_batch = to_torch(dones_env_batch[self.policy_ids[0]]).to(**self.tpdv)
 
@@ -95,12 +115,14 @@ class M_QMix:
             # get data related to the policy id
             rewards = to_torch(rew_batch[p_id][0]).to(**self.tpdv)
             curr_obs_batch = to_torch(obs_batch[p_id])
+            curr_noises_batch = to_torch(noises_batch[p_id])
             curr_act_batch = to_torch(act_batch[p_id]).to(**self.tpdv)
             curr_nobs_batch = to_torch(nobs_batch[p_id])
 
             # stacked_obs_batch size : [agent_num*batch_size, obs_shape]
             stacked_act_batch = torch.cat(list(curr_act_batch), dim=-2)
             stacked_obs_batch = torch.cat(list(curr_obs_batch), dim=-2)
+            stacked_noises_batch = torch.cat(list(curr_noises_batch), dim=-2)
             stacked_nobs_batch = torch.cat(list(curr_nobs_batch), dim=-2)
 
             if navail_act_batch[p_id] is not None:
@@ -112,7 +134,7 @@ class M_QMix:
             # curr_obs_batch size : agent_num*batch_size*obs_shape
             batch_size = curr_obs_batch.shape[1]
 
-            pol_all_q_out = policy.get_q_values(stacked_obs_batch)
+            pol_all_q_out = policy.get_q_values(stacked_obs_batch, stacked_noises_batch)
 
             if isinstance(pol_all_q_out, list):
                 # multidiscrete case
@@ -140,7 +162,7 @@ class M_QMix:
             with torch.no_grad():
                 if self.args.use_double_q:
                     # actions come from live q; get the q values for the final nobs
-                    pol_next_qs = policy.get_q_values(stacked_nobs_batch)
+                    pol_next_qs = policy.get_q_values(stacked_nobs_batch, stacked_noises_batch)
 
                     if type(pol_next_qs) == list:
                         # multidiscrete case
@@ -162,7 +184,7 @@ class M_QMix:
                         targ_pol_next_qs = target_policy.get_q_values(stacked_nobs_batch, action_batch=pol_nacts)
                 else:
                     # just choose actions from target policy
-                    _, targ_pol_next_qs = target_policy.get_actions(stacked_nobs_batch,
+                    _, targ_pol_next_qs = target_policy.get_actions(stacked_nobs_batch,stacked_noises_batch,
                                                                    available_actions=stacked_navail_act_batch,
                                                                    t_env=None,
                                                                    explore=False)
@@ -176,8 +198,8 @@ class M_QMix:
         agent_qs = torch.cat(agent_qs, dim=-1)
         agent_next_qs = torch.cat(agent_next_qs, dim=-1)
 
-        curr_Q_tot = self.mixer(agent_qs, cent_obs_batch).squeeze(-1).to(**self.tpdv)
-        next_step_Q_tot = self.target_mixer(agent_next_qs, cent_nobs_batch).squeeze(-1)
+        curr_Q_tot = self.mixer(agent_qs, cent_obs_batch, to_torch(noises_batch[self.policy_ids[0]][0])).squeeze(-1).to(**self.tpdv)
+        next_step_Q_tot = self.target_mixer(agent_next_qs, cent_nobs_batch, to_torch(noises_batch[self.policy_ids[0]][0])).squeeze(-1)
 
         # all agents must share reward, so get the reward sequence for an agent
         # form bootstrapped targets
@@ -204,6 +226,18 @@ class M_QMix:
             else:
                 loss = mse_loss(error).mean()
             new_priorities = None
+
+        q_softmax_actions = torch.nn.functional.softmax(pol_all_q_out, dim=-1).reshape(cent_obs_batch.shape[0],-1)
+        state_and_softactions = torch.cat([q_softmax_actions, cent_obs_batch], dim=-1)
+        # s_and_softa_reshaped = state_and_softactions.reshape(-1, state_and_softactions.shape[-1])
+        discrim_prediction = self.discrim(state_and_softactions)
+
+        discrim_target = to_torch(noises_batch[self.policy_ids[0]][0]).to(**self.tpdv).long().detach().max(dim=1)[1]
+        discrim_loss = self.discrim_loss(discrim_prediction, discrim_target)
+
+        averaged_discrim_loss = discrim_loss.mean()
+
+        loss = loss + averaged_discrim_loss
 
         self.optimizer.zero_grad()
         loss.backward()

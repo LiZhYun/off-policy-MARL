@@ -8,12 +8,15 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+core
 .Python
 build/
 develop-eggs/
 dist/
 downloads/
 eggs/
+*.out
+out/
 .eggs/
 lib/
 lib64/

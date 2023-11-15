@@ -11,7 +11,7 @@ class SMACRunner(MlpRunner):
         # fill replay buffer with random actions
         self.finish_first_train_reset = False
         num_warmup_episodes = max((self.batch_size/self.episode_length, self.args.num_random_episodes))
-        # self.warmup(num_warmup_episodes)
+        self.warmup(num_warmup_episodes)
         self.start = time.time()
         self.log_clear()
 

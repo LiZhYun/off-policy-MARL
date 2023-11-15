@@ -33,7 +33,7 @@ class MACPF(Trainer):
         self.num_updates = {p_id : 0 for p_id in self.policy_ids}
         self.use_same_share_obs = self.args.use_same_share_obs
         self.actor_update_interval = actor_update_interval
-        self.alpha = 0.01
+        self.alpha = 0.001
 
     # @profile
     def get_update_info(self, update_policy_id, obs_batch, act_batch, nobs_batch, navail_act_batch, dep_mode=False):
@@ -71,7 +71,7 @@ class MACPF(Trainer):
             # use target actor to get next step actions
             with torch.no_grad():
                 actions = np.zeros((batch_size, self.num_agents, act_batch[p_id].shape[-1]))
-                naction_log_probs = np.zeros((batch_size, self.num_agents, act_batch[p_id].shape[-1]))
+                naction_log_probs = np.zeros((batch_size, self.num_agents, 1))
                 for agent_idx in range(self.num_agents):
                     tmp_execution_mask = torch.stack([torch.ones(batch_size)] * agent_idx +
                                                 [torch.zeros(batch_size)] *
@@ -161,7 +161,7 @@ class MACPF(Trainer):
         update_policy.critic_optimizer.zero_grad()
 
         # detach the targets
-        errors = [target_Qs.detach() - predicted_Q for predicted_Q in curr_Q_tot]
+        errors = target_Qs.detach() - curr_Q_tot
         if self.use_per:
             importance_weights = to_torch(importance_weights).to(**self.tpdv)
             if self.use_huber_loss:
@@ -175,10 +175,12 @@ class MACPF(Trainer):
             new_priorities = np.stack([error.abs().cpu().detach().numpy().flatten() for error in errors]).mean(axis=0) + self.per_eps
         else:
             if self.use_huber_loss:
-                critic_loss = [huber_loss(error, self.huber_delta).mean() for error in errors]
+                critic_loss = huber_loss(errors, self.huber_delta).mean()
+                # critic_loss = [huber_loss(error, self.huber_delta).mean() for error in errors]
             else:
-                critic_loss = [mse_loss(error).mean() for error in errors]
-            critic_loss = torch.stack(critic_loss).sum(dim=0)
+                critic_loss = mse_loss(errors).mean()
+                # critic_loss = [mse_loss(error).mean() for error in errors]
+            # critic_loss = torch.stack(critic_loss).sum(dim=0)
             new_priorities = None
 
         critic_loss.backward()

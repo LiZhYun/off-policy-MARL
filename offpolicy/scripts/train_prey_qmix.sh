@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=predatorprey-macpf
-#SBATCH --output=./out/predatorprey-macpf_%A_%a.out # Name of stdout output file
-#SBATCH --error=./out/predatorprey-macpf_err_%A_%a.txt  # Name of stderr error file
+#SBATCH --job-name=predatorprey-mqmix
+#SBATCH --output=./out/predatorprey-mqmix_%A_%a.out # Name of stdout output file
+#SBATCH --error=./out/predatorprey-mqmix_err_%A_%a.txt  # Name of stderr error file
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
@@ -16,7 +16,7 @@
 # exp param
 env="predator_prey"
 penalty=$1
-algo="macpf"
+algo="mqmix"
 exp="check"
 
 # train param
